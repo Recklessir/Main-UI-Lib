@@ -413,7 +413,10 @@ local Templates = {
         --// Neon outline \\--
         NeonOutline = {
             Enabled = false,
+            Mode = "Static",
             Color = nil,
+            Colors = nil,
+            Speed = 1,
             Opacity = 0.6,
             Range = 6,
             Layers = 4,
@@ -431,7 +434,10 @@ local Templates = {
     },
     NeonOutline = {
         Enabled = true,
+        Mode = "Static",
         Color = nil,
+        Colors = nil,
+        Speed = 1,
         Opacity = 0.6,
         Range = 6,
         Layers = 4,
@@ -1822,7 +1828,15 @@ function Library:AddOutline(Frame: GuiObject)
     return OutlineStroke, ShadowStroke
 end
 
---// Neon outline: layered UIStrokes fading outward fake a soft glow without a hosted asset. \\--
+--// Neon outline: layered UIStrokes fading outward (eased falloff) fake a soft glow without a hosted asset. \\--
+--// Mode "Cycle" sweeps the whole glow through Colors over time, reusing the AnimateTitleText color-lerp idiom. \\--
+local function GetNeonCycleColors(Neon): { Color3 }
+    if typeof(Neon.Colors) == "table" and #Neon.Colors > 0 then
+        return Neon.Colors
+    end
+    return { Library.Scheme.AccentColor, Color3.new(1, 1, 1), Library.Scheme.AccentColor }
+end
+
 function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
     NeonInfo = Library:Validate(NeonInfo, Templates.NeonOutline)
 
@@ -1830,16 +1844,24 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
         Frame = Frame,
         Strokes = {},
         PulseTweens = {},
+        CycleConnection = nil,
         Destroyed = false,
 
         Enabled = NeonInfo.Enabled,
+        Mode = NeonInfo.Mode,
         Color = NeonInfo.Color,
+        Colors = NeonInfo.Colors,
+        Speed = NeonInfo.Speed,
         Opacity = NeonInfo.Opacity,
         Range = NeonInfo.Range,
         Layers = math.max(NeonInfo.Layers, 1),
         Pulse = NeonInfo.Pulse,
         PulseSpeed = NeonInfo.PulseSpeed,
     }
+
+    -- Live-resolved color used by "Cycle" mode; seeded so the first frame (before the
+    -- cycle loop ticks) already shows a sensible color instead of flashing in.
+    local CurrentCycleColor = Neon.Color or Library.Scheme.AccentColor
 
     local function StopPulseTweens()
         for _, Tween in Neon.PulseTweens do
@@ -1860,14 +1882,19 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
         end
 
         local BaseTransparency = 1 - math.clamp(Neon.Opacity, 0, 1)
+        local StrokeColor = (Neon.Mode == "Cycle") and CurrentCycleColor or (Neon.Color or "AccentColor")
 
         for i = 1, Neon.Layers do
-            local Progress = (i - 1) / math.max(Neon.Layers - 1, 1)
+            local LinearProgress = (i - 1) / math.max(Neon.Layers - 1, 1)
+            -- Eased (not linear) falloff: keeps the inner layers crisp/bright and lets the
+            -- outer layers do most of the fading, so the glow reads as soft instead of banded.
+            local Progress = LinearProgress ^ 1.6
             local Transparency = BaseTransparency + ((1 - BaseTransparency) * Progress)
+            local Thickness = 1 + (Neon.Range * Progress)
 
             local Stroke = New("UIStroke", {
-                Color = Neon.Color or "AccentColor",
-                Thickness = 1 + (Neon.Range * Progress),
+                Color = StrokeColor,
+                Thickness = Thickness,
                 Transparency = Transparency,
                 Enabled = Neon.Enabled ~= false,
                 ZIndex = 3,
@@ -1876,44 +1903,107 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
             table.insert(Neon.Strokes, Stroke)
 
             if Neon.Pulse then
-                local PulseTween = TweenService:Create(
-                    Stroke,
-                    TweenInfo.new(math.max(Neon.PulseSpeed, 0.1), Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-                    { Transparency = math.clamp(Transparency + 0.25, 0, 1) }
-                )
-                PulseTween:Play()
-                table.insert(Neon.PulseTweens, PulseTween)
+                local PulseSpeed = math.max(Neon.PulseSpeed, 0.1)
+                local PulseTweenInfo = TweenInfo.new(PulseSpeed, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+
+                local TransparencyTween = TweenService:Create(Stroke, PulseTweenInfo, {
+                    Transparency = math.clamp(Transparency + 0.25, 0, 1),
+                })
+                TransparencyTween:Play()
+                table.insert(Neon.PulseTweens, TransparencyTween)
+
+                -- Breathe the thickness too (a little) so Pulse reads as the glow expanding
+                -- and contracting, not just flickering brighter/dimmer in place.
+                local ThicknessTween = TweenService:Create(Stroke, PulseTweenInfo, {
+                    Thickness = Thickness + 1.5,
+                })
+                ThicknessTween:Play()
+                table.insert(Neon.PulseTweens, ThicknessTween)
             end
         end
     end
 
     Redraw()
 
+    local CycleElapsed = 0
+    local CycleAccumulator = 0
+    local CycleUpdateInterval = 1 / 20
+    Neon.CycleConnection = RunService.Heartbeat:Connect(function(DeltaTime)
+        if Neon.Destroyed or Neon.Mode ~= "Cycle" then
+            return
+        end
+
+        CycleElapsed += DeltaTime
+        CycleAccumulator += DeltaTime
+        if CycleAccumulator < CycleUpdateInterval then
+            return
+        end
+        CycleAccumulator = 0
+
+        local Colors = GetNeonCycleColors(Neon)
+        local Phase = (CycleElapsed * Neon.Speed) % 1
+        local ScaledT = Phase * (#Colors - 1)
+        local LowerIndex = math.floor(ScaledT) + 1
+        local UpperIndex = math.min(LowerIndex + 1, #Colors)
+        CurrentCycleColor = Colors[LowerIndex]:Lerp(Colors[UpperIndex], ScaledT - math.floor(ScaledT))
+
+        for _, Stroke in Neon.Strokes do
+            Stroke.Color = CurrentCycleColor
+        end
+    end)
+    Library:GiveSignal(Neon.CycleConnection)
+
+    function Neon:SetOptions(NewOptions: { [string]: any }?)
+        NewOptions = NewOptions or {}
+        local NeedsRedraw = false
+
+        if NewOptions.Mode ~= nil then self.Mode = NewOptions.Mode; NeedsRedraw = true end
+        if NewOptions.Color ~= nil then self.Color = NewOptions.Color; NeedsRedraw = true end
+        if NewOptions.Colors ~= nil then self.Colors = NewOptions.Colors end
+        if NewOptions.Speed ~= nil then self.Speed = NewOptions.Speed end
+        if NewOptions.Opacity ~= nil then self.Opacity = NewOptions.Opacity; NeedsRedraw = true end
+        if NewOptions.Range ~= nil then self.Range = NewOptions.Range; NeedsRedraw = true end
+        if NewOptions.Layers ~= nil then self.Layers = math.max(NewOptions.Layers, 1); NeedsRedraw = true end
+        if NewOptions.Pulse ~= nil then self.Pulse = NewOptions.Pulse; NeedsRedraw = true end
+        if NewOptions.PulseSpeed ~= nil then self.PulseSpeed = NewOptions.PulseSpeed; NeedsRedraw = true end
+
+        if NewOptions.Enabled ~= nil then
+            self.Enabled = NewOptions.Enabled
+            if not NeedsRedraw then
+                for _, Stroke in self.Strokes do
+                    Stroke.Enabled = self.Enabled
+                end
+            end
+        end
+
+        if NeedsRedraw then
+            Redraw()
+        end
+    end
+
     function Neon:SetColor(Color: Color3?)
-        self.Color = Color
-        Redraw()
+        self:SetOptions({ Color = Color })
     end
 
     function Neon:SetOpacity(Opacity: number)
-        self.Opacity = Opacity
-        Redraw()
+        self:SetOptions({ Opacity = Opacity })
     end
 
     function Neon:SetRange(Range: number)
-        self.Range = Range
-        Redraw()
+        self:SetOptions({ Range = Range })
     end
 
     function Neon:SetEnabled(Enabled: boolean)
-        self.Enabled = Enabled
-        for _, Stroke in self.Strokes do
-            Stroke.Enabled = Enabled
-        end
+        self:SetOptions({ Enabled = Enabled })
     end
 
     function Neon:Destroy()
         if self.Destroyed then return end
         self.Destroyed = true
+
+        if self.CycleConnection and self.CycleConnection.Connected then
+            self.CycleConnection:Disconnect()
+        end
 
         for _, Stroke in self.Strokes do
             pcall(Stroke.Destroy, Stroke)
@@ -9097,29 +9187,26 @@ function Library:CreateWindow(WindowInfo)
     Window.NeonOutline = NeonOutlineController
 
     function Window:SetNeonOutline(NeonInfo: { [string]: any }?)
-        WindowInfo.NeonOutline = Library:Validate(NeonInfo, Templates.Window.NeonOutline)
-
-        if Window.NeonOutline then
-            Window.NeonOutline:Destroy()
-        end
-
-        Window.NeonOutline = Library:AddNeonOutline(MainFrame, WindowInfo.NeonOutline)
+        -- Partial update on the existing controller (Window.NeonOutline always exists once the
+        -- window is created) so unspecified fields keep their current value instead of
+        -- silently resetting to Templates.Window.NeonOutline's defaults.
+        Window.NeonOutline:SetOptions(NeonInfo or {})
         return Window.NeonOutline
     end
 
     Window.TitleAnimation = TitleAnimationController
 
     function Window:SetTitleAnimation(AnimationInfo: { [string]: any }?)
-        WindowInfo.TitleAnimation = Library:Validate(AnimationInfo, Templates.Window.TitleAnimation)
-
+        -- Partial update if already animating, so unspecified fields (Colors, Speed, ...) keep
+        -- their current value instead of resetting to Templates.Window.TitleAnimation's defaults.
         if Window.TitleAnimation then
-            Window.TitleAnimation:Destroy()
+            Window.TitleAnimation:SetOptions(AnimationInfo)
+            return Window.TitleAnimation
         end
 
+        WindowInfo.TitleAnimation = Library:Validate(AnimationInfo, Templates.Window.TitleAnimation)
         if WindowInfo.TitleAnimation.Enabled then
             Window.TitleAnimation = Library:AnimateTitleText(WindowTitle, WindowInfo.TitleAnimation)
-        else
-            Window.TitleAnimation = nil
         end
 
         return Window.TitleAnimation
@@ -12029,16 +12116,14 @@ function Library:CreateLoading(LoadingInfo)
     end
 
     function Loading:SetTitleAnimation(AnimationInfo: { [string]: any }?)
-        LoadingInfo.TitleAnimation = Library:Validate(AnimationInfo, Templates.Loading.TitleAnimation)
-
         if Loading.TitleAnimation then
-            Loading.TitleAnimation:Destroy()
+            Loading.TitleAnimation:SetOptions(AnimationInfo)
+            return Loading.TitleAnimation
         end
 
+        LoadingInfo.TitleAnimation = Library:Validate(AnimationInfo, Templates.Loading.TitleAnimation)
         if LoadingInfo.TitleAnimation.Enabled then
             Loading.TitleAnimation = Library:AnimateTitleText(LoadingTitleLabel, LoadingInfo.TitleAnimation)
-        else
-            Loading.TitleAnimation = nil
         end
 
         return Loading.TitleAnimation

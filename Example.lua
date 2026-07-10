@@ -64,10 +64,12 @@ local Window = Library:CreateWindow({
 	NotifySide = "Right",
 	ShowCustomCursor = true,
 
-	-- Stage 2 additions — see B/C in Library.lua (Library:AddNeonOutline / Library:AnimateTitleText)
+	-- Stage 2/3 additions — see Library.lua (Library:AddNeonOutline / Library:AnimateTitleText)
 	NeonOutline = {
 		Enabled = true,
-		Color = Color3.fromRGB(255, 255, 255),
+		Mode = "Cycle", -- "Static" for a single fixed Color, or "Cycle" to sweep through Colors
+		Colors = JankAccentColors,
+		Speed = 0.35,
 		Opacity = 0.5,
 		Range = 6,
 		Layers = 4,
