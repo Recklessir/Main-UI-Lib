@@ -1890,14 +1890,22 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
             -- outer layers do most of the fading, so the glow reads as soft instead of banded.
             local Progress = LinearProgress ^ 1.6
             local Transparency = BaseTransparency + ((1 - BaseTransparency) * Progress)
-            local Thickness = 1 + (Neon.Range * Progress)
+
+            -- Roblox renders UIStroke asymmetrically per-side (thinner/gappy on some edges)
+            -- once Thickness drops to ~1px or below, and looks worse on fractional/sub-pixel
+            -- values — start at a firm 2px and round every layer to a whole pixel to avoid it.
+            local Thickness = math.floor(2 + (Neon.Range * Progress) + 0.5)
 
             local Stroke = New("UIStroke", {
                 Color = StrokeColor,
                 Thickness = Thickness,
                 Transparency = Transparency,
                 Enabled = Neon.Enabled ~= false,
-                ZIndex = 3,
+                LineJoinMode = Enum.LineJoinMode.Round,
+                -- Distinct, descending ZIndex per layer (inner layers highest) so the crisp
+                -- core always draws on top of the softer outer layers instead of leaving the
+                -- draw order among same-ZIndex sibling UIStrokes undefined.
+                ZIndex = 3 + (Neon.Layers - i),
                 Parent = Neon.Frame,
             })
             table.insert(Neon.Strokes, Stroke)
