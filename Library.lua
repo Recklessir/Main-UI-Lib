@@ -1969,6 +1969,9 @@ function Library:AnimateTitleText(Label: TextLabel, Options: { [string]: any }?)
         return { Library.Scheme.AccentColor, Library.Scheme.FontColor }
     end
 
+    --// Falloff (in characters) used to soften "Highlight" mode into a small glow instead of a hard letter-swap. \\--
+    local HighlightFalloff = 1.5
+
     local Elapsed = 0
     local function Render()
         if Anim.Destroyed or not Anim.Enabled then
@@ -1986,8 +1989,14 @@ function Library:AnimateTitleText(Label: TextLabel, Options: { [string]: any }?)
             local Color
 
             if Anim.Mode == "Highlight" then
-                local HotIndex = math.floor(Phase * CharCount)
-                Color = (Index == HotIndex) and (Colors[2] or Colors[1]) or Library.Scheme.FontColor
+                local HotPosition = Phase * CharCount
+                local Distance = math.min(
+                    math.abs(Index - HotPosition),
+                    math.abs(Index - HotPosition + CharCount),
+                    math.abs(Index - HotPosition - CharCount)
+                )
+                local Weight = math.clamp(1 - (Distance / HighlightFalloff), 0, 1)
+                Color = Library.Scheme.FontColor:Lerp(Colors[2] or Colors[1], Weight)
             else
                 local T = ((Index / math.max(CharCount - 1, 1)) + Phase) % 1
                 local ScaledT = T * (#Colors - 1)
@@ -2003,8 +2012,13 @@ function Library:AnimateTitleText(Label: TextLabel, Options: { [string]: any }?)
         Label.Text = table.concat(Parts)
     end
 
+    local function RevertToBaseText()
+        Label.RichText = false
+        Label.Text = BaseText
+    end
+
     local Accumulator = 0
-    local UpdateInterval = 1 / 12
+    local UpdateInterval = 1 / 20
     Anim.Connection = RunService.Heartbeat:Connect(function(DeltaTime)
         Elapsed += DeltaTime
         Accumulator += DeltaTime
@@ -2023,8 +2037,10 @@ function Library:AnimateTitleText(Label: TextLabel, Options: { [string]: any }?)
         if NewOptions.Colors ~= nil then self.Colors = NewOptions.Colors end
         if NewOptions.Speed ~= nil then self.Speed = NewOptions.Speed end
 
-        if not self.Enabled and self.Label then
-            self.Label.Text = BaseText
+        if self.Enabled then
+            Label.RichText = true
+        elseif self.Label then
+            RevertToBaseText()
         end
     end
 
@@ -2037,7 +2053,7 @@ function Library:AnimateTitleText(Label: TextLabel, Options: { [string]: any }?)
         end
 
         if self.Label then
-            self.Label.Text = BaseText
+            RevertToBaseText()
         end
     end
 
