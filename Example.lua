@@ -15,7 +15,7 @@ Library.ShowToggleFrameInKeybinds = true -- Make toggle keybinds work inside the
 
 -- Neon/title-animation colors are customizable here — change these to reskin the intro & window accents.
 local JankAccentColors = {
-	Color3.fromRGB(163, 163, 163),
+	Color3.fromRGB(35, 35, 35),
 	Color3.fromRGB(255, 255, 255),
 }
 
@@ -71,8 +71,7 @@ local Window = Library:CreateWindow({
 		Colors = JankAccentColors,
 		Speed = 0.35,
 		Opacity = 0.5,
-		Range = 6,
-		Layers = 4,
+		Range = 14,
 		Pulse = true,
 		PulseSpeed = 2.5,
 	},

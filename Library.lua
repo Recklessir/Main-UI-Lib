@@ -62,6 +62,17 @@ local CustomImageManagerAssets = {
 
         Id = nil,
     },
+
+    -- Not part of upstream deividcomsono/Obsidian; self-hosted here for the neon glow effect.
+    -- RobloxId 88645182616510 is a real, standalone Decal ("Glow") that GetAsset() falls back
+    -- to directly via rbxassetid:// if the local download below ever fails.
+    Glow = {
+        RobloxId = 88645182616510,
+        Path = "Obsidian/assets/Glow.png",
+        URL = "https://raw.githubusercontent.com/Recklessir/Main-UI-Lib/main/assets/Glow.png",
+
+        Id = nil,
+    },
 }
 do
     local function RecursiveCreatePath(Path: string, IsFile: boolean?)
@@ -418,8 +429,7 @@ local Templates = {
             Colors = nil,
             Speed = 1,
             Opacity = 0.6,
-            Range = 6,
-            Layers = 4,
+            Range = 14,
             Pulse = false,
             PulseSpeed = 2,
         },
@@ -439,8 +449,7 @@ local Templates = {
         Colors = nil,
         Speed = 1,
         Opacity = 0.6,
-        Range = 6,
-        Layers = 4,
+        Range = 14,
         Pulse = false,
         PulseSpeed = 2,
     },
@@ -1828,8 +1837,13 @@ function Library:AddOutline(Frame: GuiObject)
     return OutlineStroke, ShadowStroke
 end
 
---// Neon outline: layered UIStrokes fading outward (eased falloff) fake a soft glow without a hosted asset. \\--
---// Mode "Cycle" sweeps the whole glow through Colors over time, reusing the AnimateTitleText color-lerp idiom. \\--
+--// Neon outline: single blurred glow ImageLabel (CustomImageManager "Glow" asset) stretched \\--
+--// behind the frame, instead of faking a blur with stacked UIStrokes. UIStroke has no native \\--
+--// blur, so multi-layer stroke "glows" hit real Roblox engine limitations (sub-pixel/per-side \\--
+--// thickness inconsistencies, corner-radius mismatches between layers) that a pre-blurred \\--
+--// image sidesteps entirely, and it's one Instance instead of several. \\--
+--// Mode "Cycle" sweeps the glow through Colors over time via ImageColor3, reusing the \\--
+--// AnimateTitleText color-lerp idiom. \\--
 local function GetNeonCycleColors(Neon): { Color3 }
     if typeof(Neon.Colors) == "table" and #Neon.Colors > 0 then
         return Neon.Colors
@@ -1842,8 +1856,8 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
 
     local Neon = {
         Frame = Frame,
-        Strokes = {},
-        PulseTweens = {},
+        Glow = nil,
+        PulseTween = nil,
         CycleConnection = nil,
         Destroyed = false,
 
@@ -1854,7 +1868,6 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
         Speed = NeonInfo.Speed,
         Opacity = NeonInfo.Opacity,
         Range = NeonInfo.Range,
-        Layers = math.max(NeonInfo.Layers, 1),
         Pulse = NeonInfo.Pulse,
         PulseSpeed = NeonInfo.PulseSpeed,
     }
@@ -1863,71 +1876,50 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
     -- cycle loop ticks) already shows a sensible color instead of flashing in.
     local CurrentCycleColor = Neon.Color or Library.Scheme.AccentColor
 
-    local function StopPulseTweens()
-        for _, Tween in Neon.PulseTweens do
-            StopTween(Tween, true)
+    local function StopPulseTween()
+        if Neon.PulseTween then
+            StopTween(Neon.PulseTween, true)
+            Neon.PulseTween = nil
         end
-        table.clear(Neon.PulseTweens)
     end
 
     local function Redraw()
-        for _, Stroke in Neon.Strokes do
-            pcall(Stroke.Destroy, Stroke)
+        if Neon.Glow then
+            pcall(Neon.Glow.Destroy, Neon.Glow)
+            Neon.Glow = nil
         end
-        table.clear(Neon.Strokes)
-        StopPulseTweens()
+        StopPulseTween()
 
         if Neon.Destroyed or not Neon.Frame or not Neon.Frame.Parent then
             return
         end
 
-        local BaseTransparency = 1 - math.clamp(Neon.Opacity, 0, 1)
-        local StrokeColor = (Neon.Mode == "Cycle") and CurrentCycleColor or (Neon.Color or "AccentColor")
+        local Range = math.max(Neon.Range, 0)
+        local GlowColor = (Neon.Mode == "Cycle") and CurrentCycleColor or (Neon.Color or "AccentColor")
+        local GlowTransparency = 1 - math.clamp(Neon.Opacity, 0, 1)
 
-        for i = 1, Neon.Layers do
-            local LinearProgress = (i - 1) / math.max(Neon.Layers - 1, 1)
-            -- Eased (not linear) falloff: keeps the inner layers crisp/bright and lets the
-            -- outer layers do most of the fading, so the glow reads as soft instead of banded.
-            local Progress = LinearProgress ^ 1.6
-            local Transparency = BaseTransparency + ((1 - BaseTransparency) * Progress)
+        Neon.Glow = New("ImageLabel", {
+            Name = "NeonGlow",
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, -Range, 0, -Range),
+            Size = UDim2.new(1, Range * 2, 1, Range * 2),
+            ScaleType = Enum.ScaleType.Stretch,
+            Image = CustomImageManager.GetAsset("Glow"),
+            ImageColor3 = GlowColor,
+            ImageTransparency = GlowTransparency,
+            Visible = Neon.Enabled ~= false,
+            ZIndex = -1,
+            Parent = Neon.Frame,
+        })
 
-            -- Roblox renders UIStroke asymmetrically per-side (thinner/gappy on some edges)
-            -- once Thickness drops to ~1px or below, and looks worse on fractional/sub-pixel
-            -- values — start at a firm 2px and round every layer to a whole pixel to avoid it.
-            local Thickness = math.floor(2 + (Neon.Range * Progress) + 0.5)
-
-            local Stroke = New("UIStroke", {
-                Color = StrokeColor,
-                Thickness = Thickness,
-                Transparency = Transparency,
-                Enabled = Neon.Enabled ~= false,
-                LineJoinMode = Enum.LineJoinMode.Round,
-                -- Distinct, descending ZIndex per layer (inner layers highest) so the crisp
-                -- core always draws on top of the softer outer layers instead of leaving the
-                -- draw order among same-ZIndex sibling UIStrokes undefined.
-                ZIndex = 3 + (Neon.Layers - i),
-                Parent = Neon.Frame,
-            })
-            table.insert(Neon.Strokes, Stroke)
-
-            if Neon.Pulse then
-                local PulseSpeed = math.max(Neon.PulseSpeed, 0.1)
-                local PulseTweenInfo = TweenInfo.new(PulseSpeed, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
-
-                local TransparencyTween = TweenService:Create(Stroke, PulseTweenInfo, {
-                    Transparency = math.clamp(Transparency + 0.25, 0, 1),
-                })
-                TransparencyTween:Play()
-                table.insert(Neon.PulseTweens, TransparencyTween)
-
-                -- Breathe the thickness too (a little) so Pulse reads as the glow expanding
-                -- and contracting, not just flickering brighter/dimmer in place.
-                local ThicknessTween = TweenService:Create(Stroke, PulseTweenInfo, {
-                    Thickness = Thickness + 1.5,
-                })
-                ThicknessTween:Play()
-                table.insert(Neon.PulseTweens, ThicknessTween)
-            end
+        if Neon.Pulse then
+            local PulseSpeed = math.max(Neon.PulseSpeed, 0.1)
+            Neon.PulseTween = TweenService:Create(
+                Neon.Glow,
+                TweenInfo.new(PulseSpeed, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+                { ImageTransparency = math.clamp(GlowTransparency + 0.25, 0, 1) }
+            )
+            Neon.PulseTween:Play()
         end
     end
 
@@ -1937,7 +1929,7 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
     local CycleAccumulator = 0
     local CycleUpdateInterval = 1 / 20
     Neon.CycleConnection = RunService.Heartbeat:Connect(function(DeltaTime)
-        if Neon.Destroyed or Neon.Mode ~= "Cycle" then
+        if Neon.Destroyed or Neon.Mode ~= "Cycle" or not Neon.Glow then
             return
         end
 
@@ -1955,9 +1947,7 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
         local UpperIndex = math.min(LowerIndex + 1, #Colors)
         CurrentCycleColor = Colors[LowerIndex]:Lerp(Colors[UpperIndex], ScaledT - math.floor(ScaledT))
 
-        for _, Stroke in Neon.Strokes do
-            Stroke.Color = CurrentCycleColor
-        end
+        Neon.Glow.ImageColor3 = CurrentCycleColor
     end)
     Library:GiveSignal(Neon.CycleConnection)
 
@@ -1971,16 +1961,13 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
         if NewOptions.Speed ~= nil then self.Speed = NewOptions.Speed end
         if NewOptions.Opacity ~= nil then self.Opacity = NewOptions.Opacity; NeedsRedraw = true end
         if NewOptions.Range ~= nil then self.Range = NewOptions.Range; NeedsRedraw = true end
-        if NewOptions.Layers ~= nil then self.Layers = math.max(NewOptions.Layers, 1); NeedsRedraw = true end
         if NewOptions.Pulse ~= nil then self.Pulse = NewOptions.Pulse; NeedsRedraw = true end
         if NewOptions.PulseSpeed ~= nil then self.PulseSpeed = NewOptions.PulseSpeed; NeedsRedraw = true end
 
         if NewOptions.Enabled ~= nil then
             self.Enabled = NewOptions.Enabled
-            if not NeedsRedraw then
-                for _, Stroke in self.Strokes do
-                    Stroke.Enabled = self.Enabled
-                end
+            if not NeedsRedraw and self.Glow then
+                self.Glow.Visible = self.Enabled
             end
         end
 
@@ -2013,11 +2000,11 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
             self.CycleConnection:Disconnect()
         end
 
-        for _, Stroke in self.Strokes do
-            pcall(Stroke.Destroy, Stroke)
+        if self.Glow then
+            pcall(self.Glow.Destroy, self.Glow)
+            self.Glow = nil
         end
-        table.clear(self.Strokes)
-        StopPulseTweens()
+        StopPulseTween()
     end
 
     if Frame then
