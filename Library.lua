@@ -1869,7 +1869,6 @@ function Library:AddNeonOutline(Frame: GuiObject, NeonInfo: { [string]: any }?)
                 Color = Neon.Color or "AccentColor",
                 Thickness = 1 + (Neon.Range * Progress),
                 Transparency = Transparency,
-                ApplyStrokeMode = Enum.ApplyStrokeMode.Outside,
                 Enabled = Neon.Enabled ~= false,
                 ZIndex = 3,
                 Parent = Neon.Frame,
