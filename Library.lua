@@ -12028,6 +12028,22 @@ function Library:CreateLoading(LoadingInfo)
         LoadingIcon.ImageRectSize = IconData.ImageRectSize
     end
 
+    function Loading:SetTitleAnimation(AnimationInfo: { [string]: any }?)
+        LoadingInfo.TitleAnimation = Library:Validate(AnimationInfo, Templates.Loading.TitleAnimation)
+
+        if Loading.TitleAnimation then
+            Loading.TitleAnimation:Destroy()
+        end
+
+        if LoadingInfo.TitleAnimation.Enabled then
+            Loading.TitleAnimation = Library:AnimateTitleText(LoadingTitleLabel, LoadingInfo.TitleAnimation)
+        else
+            Loading.TitleAnimation = nil
+        end
+
+        return Loading.TitleAnimation
+    end
+
     function Loading:SetLoadingIconTweenTime(TweenTime)
         if RotationTween then
             StopTween(RotationTween, true)
